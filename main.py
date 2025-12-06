@@ -52,7 +52,7 @@ class BunjangBot:
                 KeyboardButton("📊 Статус")
             ]
         ]
-        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
