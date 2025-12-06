@@ -513,3 +513,342 @@ class BunjangParser:
         
         return message
 
+
+class FruitsFamilyParser:
+    """Парсер для сайта fruitsfamily.com"""
+    
+    def __init__(self, base_url: str = 'https://fruitsfamily.com/', use_selenium: bool = False, brands_filter: List[Dict] = None):
+        self.base_url = base_url
+        self.use_selenium = use_selenium and SELENIUM_AVAILABLE
+        self.brands_filter = brands_filter or []
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
+        self.driver = None
+    
+    def get_page_selenium(self, url: str) -> Optional[BeautifulSoup]:
+        """Получить HTML страницы с помощью Selenium"""
+        if not SELENIUM_AVAILABLE:
+            return None
+        
+        try:
+            if not self.driver:
+                chrome_options = Options()
+                chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--window-size=1920,1080')
+                chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
+                self.driver = webdriver.Chrome(options=chrome_options)
+            
+            self.driver.get(url)
+            # Ждем загрузки контента
+            time.sleep(4)
+            
+            # Прокручиваем страницу для загрузки динамического контента
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+            
+            html = self.driver.page_source
+            return BeautifulSoup(html, 'html.parser')
+        except Exception as e:
+            print(f"Ошибка при получении страницы через Selenium {url}: {e}")
+            return None
+    
+    def get_page(self, url: str) -> Optional[BeautifulSoup]:
+        """Получить HTML страницы"""
+        if self.use_selenium:
+            return self.get_page_selenium(url)
+        
+        try:
+            response = self.session.get(url, timeout=15)
+            response.raise_for_status()
+            return BeautifulSoup(response.content, 'html.parser')
+        except Exception as e:
+            print(f"Ошибка при получении страницы {url}: {e}")
+            # Пробуем через Selenium если обычный запрос не сработал
+            if SELENIUM_AVAILABLE:
+                print("Пробуем через Selenium...")
+                return self.get_page_selenium(url)
+            return None
+    
+    def close(self):
+        """Закрыть Selenium драйвер"""
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+    
+    def parse_product_card(self, card_element) -> Optional[Dict]:
+        """Парсинг карточки товара с fruitsfamily.com"""
+        product = {}
+        
+        try:
+            all_text = card_element.get_text(separator=' ', strip=True)
+            
+            # Название товара
+            title = None
+            title_selectors = [
+                # По классам, специфичным для fruitsfamily
+                lambda x: x.find(['h1', 'h2', 'h3', 'h4', 'h5', 'div', 'span', 'p'], 
+                               class_=lambda c: c and ('title' in c.lower() or 'name' in c.lower() or 'product' in c.lower())),
+                lambda x: x.find('a', href=True),
+                lambda x: x.find('img', alt=True),
+            ]
+            
+            for selector in title_selectors:
+                elem = selector(card_element)
+                if elem:
+                    if elem.name == 'img':
+                        title = elem.get('alt', '').strip()
+                    else:
+                        title = elem.get_text(strip=True)
+                    if title and len(title) > 3:
+                        break
+            
+            # Если не нашли, берем первый значимый текст
+            if not title or len(title) < 3:
+                link_elem = card_element.find('a', href=True)
+                if link_elem:
+                    title = link_elem.get_text(strip=True)
+                    if not title or len(title) < 3:
+                        parent = link_elem.parent
+                        if parent:
+                            title = parent.get_text(strip=True)
+            
+            if not title or len(title) < 3:
+                words = all_text.split()
+                if len(words) > 2:
+                    title = ' '.join(words[:15])
+            
+            # Исключаем служебные элементы
+            if title:
+                title_lower = title.lower()
+                exclude_words = ['arrow', 'more', 'category', 'search', 'home', 'menu', 'cart',
+                               '인기', '브랜드', '랭킹', '상품', '검색', '홈', '마켓', '판매',
+                               'popular', 'brand', 'ranking', 'product', 'search']
+                if any(word in title_lower for word in exclude_words) and len(title) < 20:
+                    return None
+            
+            if title and len(title) > 3:
+                product['title'] = title[:200]
+            
+            # Ссылка
+            link_elem = card_element.find('a', href=True)
+            if link_elem and link_elem.get('href'):
+                href = link_elem.get('href')
+                product['link'] = urljoin(self.base_url, href)
+            elif card_element.name == 'a' and card_element.get('href'):
+                product['link'] = urljoin(self.base_url, card_element.get('href'))
+            
+            # Цена - ищем корейские валюты (원, KRW)
+            price = None
+            price_patterns = [
+                lambda x: x.find(['span', 'div', 'p', 'strong', 'b'], 
+                               class_=lambda c: c and 'price' in c.lower()),
+                lambda x: re.search(r'\d+[\d,.]*\s*원|\d+[\d,.]*\s*KRW|원\s*\d+[\d,.]*|KRW\s*\d+[\d,.]*', all_text),
+                lambda x: re.search(r'\d+[\d,.]*\s*[₩$€£¥]|[₩$€£¥]\s*\d+[\d,.]*', all_text),
+            ]
+            
+            for pattern in price_patterns:
+                try:
+                    result = pattern(card_element)
+                    if result:
+                        if hasattr(result, 'group') and callable(getattr(result, 'group', None)):
+                            price = result.group(0).strip()
+                        elif hasattr(result, 'get_text'):
+                            price = result.get_text(strip=True)
+                        else:
+                            price = str(result).strip()
+                        if price:
+                            break
+                except:
+                    continue
+            
+            if price:
+                product['price'] = price[:50]
+            
+            # Изображение
+            img_elem = card_element.find('img')
+            if img_elem:
+                img_src = (img_elem.get('src') or 
+                          img_elem.get('data-src') or 
+                          img_elem.get('data-lazy-src') or
+                          img_elem.get('data-original') or
+                          img_elem.get('data-srcset'))
+                if img_src:
+                    # Обрабатываем srcset если есть
+                    if ' ' in img_src:
+                        img_src = img_src.split()[0]
+                    product['image'] = urljoin(self.base_url, img_src)
+            
+            # Описание
+            desc_elem = card_element.find(['p', 'div', 'span'], 
+                                        class_=lambda x: x and ('desc' in x.lower() or 'description' in x.lower() or 'info' in x.lower()))
+            if desc_elem:
+                product['description'] = desc_elem.get_text(strip=True)[:300]
+            elif all_text and len(all_text) > len(title or ''):
+                desc = all_text.replace(title or '', '', 1).strip()
+                if desc and len(desc) > 10:
+                    product['description'] = desc[:300]
+            
+        except Exception as e:
+            print(f"Ошибка при парсинге карточки товара: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Проверяем фильтр по брендам
+        if self.brands_filter and product.get('title'):
+            if not self._matches_brand_filter(product):
+                return None
+        
+        # Возвращаем товар если есть хотя бы название или ссылка
+        if product.get('title') and len(product.get('title', '')) > 3:
+            return product
+        elif product.get('link'):
+            product['title'] = product['link'].split('/')[-1] or 'Товар'
+            if self.brands_filter:
+                if not self._matches_brand_filter(product):
+                    return None
+            return product
+        
+        return None
+    
+    def _matches_brand_filter(self, product: Dict) -> bool:
+        """Проверяет, соответствует ли товар фильтру брендов"""
+        if not self.brands_filter:
+            return True
+        
+        title = product.get('title', '').lower()
+        description = product.get('description', '').lower()
+        text_to_check = f"{title} {description}"
+        
+        for brand_info in self.brands_filter:
+            brand_name = brand_info['name'].lower()
+            category = brand_info.get('category')
+            
+            if brand_name in text_to_check:
+                if category:
+                    category_keywords = {
+                        'shoes': ['shoe', 'sneaker', 'boot', 'sandal', 'slipper', 'loafer', 'oxford', 'heel', 'footwear', 
+                                 'обувь', 'кроссовки', 'ботинки', 'sneakers', 'boots', '신발', '운동화', '부츠']
+                    }
+                    if category in category_keywords:
+                        keywords = category_keywords[category]
+                        if any(keyword in text_to_check for keyword in keywords):
+                            return True
+                        else:
+                            continue
+                else:
+                    return True
+        
+        return False
+    
+    def parse_products(self, url: str = None, limit: int = 50) -> List[Dict]:
+        """Парсинг товаров с указанной страницы"""
+        products = []
+        
+        if not url:
+            url = self.base_url
+        
+        print(f"Парсинг страницы: {url}")
+        soup = self.get_page(url)
+        
+        if not soup:
+            if not self.use_selenium and SELENIUM_AVAILABLE:
+                print("Пробуем использовать Selenium для динамического контента...")
+                soup = self.get_page_selenium(url)
+            
+            if not soup:
+                return products
+        
+        # Ищем карточки товаров
+        product_cards = []
+        
+        selectors_to_try = [
+            # По классам с product/item/card
+            lambda s: s.find_all('div', class_=lambda x: x and ('product' in x.lower() or 'item' in x.lower() or 'card' in x.lower())),
+            lambda s: s.find_all('article', class_=lambda x: x and ('product' in x.lower() or 'item' in x.lower())),
+            lambda s: s.find_all('a', class_=lambda x: x and ('product' in x.lower() or 'item' in x.lower())),
+            # Ссылки с изображениями и текстом
+            lambda s: [elem for elem in s.find_all('a', href=True) 
+                      if elem.find('img') and elem.get_text(strip=True) and len(elem.get_text(strip=True)) > 10
+                      and '/product/' in (elem.get('href', '') or '')],
+            # По data-атрибутам
+            lambda s: s.find_all(['div', 'article'], attrs={'data-product-id': True}),
+            lambda s: s.find_all(['div', 'article'], attrs={'data-item-id': True}),
+        ]
+        
+        for selector_func in selectors_to_try:
+            try:
+                product_cards = selector_func(soup)
+                if product_cards and len(product_cards) > 0:
+                    print(f"Найдено {len(product_cards)} потенциальных товаров")
+                    break
+            except:
+                continue
+        
+        # Если не нашли, ищем в контейнерах
+        if not product_cards:
+            containers = soup.find_all(['div', 'section', 'article', 'ul', 'li'], 
+                                     class_=lambda x: x and (
+                                         'list' in x.lower() or 'grid' in x.lower() or 'container' in x.lower() or 
+                                         'products' in x.lower() or 'items' in x.lower() or 'card' in x.lower()
+                                     ))
+            for container in containers:
+                links = container.find_all('a', href=True)
+                for link in links:
+                    href = link.get('href', '')
+                    if '/product/' in href or '/item/' in href or '/goods/' in href:
+                        if link.find('img') and link.get_text(strip=True) and len(link.get_text(strip=True)) > 10:
+                            product_cards.append(link.parent if link.parent.name in ['div', 'article', 'li'] else link)
+        
+        # Парсим найденные карточки
+        seen_titles = set()
+        parsed_count = 0
+        for card in product_cards[:limit * 3]:
+            parsed_count += 1
+            product = self.parse_product_card(card)
+            if product and product.get('title'):
+                title_key = product['title'].lower().strip()
+                if title_key not in seen_titles and len(title_key) > 3:
+                    seen_titles.add(title_key)
+                    products.append(product)
+                    if len(products) >= limit:
+                        break
+        
+        print(f"Обработано {parsed_count} элементов, успешно распарсено {len(products)} товаров")
+        return products[:limit]
+    
+    def parse_products_from_search(self, search_url: str = None, search_query: str = None, limit: int = 50) -> List[Dict]:
+        """Парсинг товаров из результатов поиска"""
+        if search_url:
+            return self.parse_products(url=search_url, limit=limit)
+        elif search_query:
+            search_url = f"{self.base_url}search?q={search_query.replace(' ', '%20')}"
+            return self.parse_products(url=search_url, limit=limit)
+        else:
+            return self.parse_products(limit=limit)
+    
+    def format_product_message(self, product: Dict) -> str:
+        """Форматирование товара для отправки в Telegram"""
+        message = f"<b>{product.get('title', 'Без названия')}</b>\n\n"
+        
+        if product.get('price'):
+            message += f"Цена: {product['price']}\n"
+        
+        if product.get('description'):
+            message += f"{product['description'][:200]}...\n"
+        
+        if product.get('link'):
+            message += f"\n<a href='{product['link']}'>Ссылка на товар</a>"
+        
+        return message

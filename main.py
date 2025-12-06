@@ -1,21 +1,45 @@
 import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from parser import BunjangParser
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from parser import BunjangParser, FruitsFamilyParser
 from bot import TelegramBot
 from database import ProductDatabase
 import config
 
 class BunjangBot:
     def __init__(self):
-        self.parser = BunjangParser(
+        # Парсер для Bunjang
+        self.bunjang_parser = BunjangParser(
             config.BUNJANG_URL, 
             use_selenium=config.USE_SELENIUM,
             brands_filter=config.BRANDS_TO_PARSE
         )
+        # Парсер для FruitsFamily
+        self.fruits_parser = FruitsFamilyParser(
+            base_url='https://fruitsfamily.com/',
+            use_selenium=config.USE_SELENIUM,
+            brands_filter=config.BRANDS_TO_PARSE if hasattr(config, 'FRUITS_BRANDS_TO_PARSE') else None
+        )
+        # Для обратной совместимости
+        self.parser = self.bunjang_parser
         self.bot = TelegramBot(config.TELEGRAM_BOT_TOKEN)
         self.db = ProductDatabase(config.DB_FILE)
         self.application = None
+        self.is_parsing_active = True  # Флаг для управления парсингом
+        self.scheduler_task = None  # Задача планировщика
+    
+    def get_control_keyboard(self):
+        """Создает клавиатуру с кнопками управления"""
+        keyboard = [
+            [
+                InlineKeyboardButton("▶️ Начать парс", callback_data="start_parse"),
+                InlineKeyboardButton("⏹️ Остановить парс", callback_data="stop_parse")
+            ],
+            [
+                InlineKeyboardButton("📊 Статус парсинга", callback_data="parse_status")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
@@ -28,11 +52,18 @@ class BunjangBot:
         )
         self.db.subscribe_user(user.id)
         
+        status_text = "активен" if self.is_parsing_active else "остановлен"
+        
         await update.message.reply_text(
-            "Привет! Я бот для парсинга товаров с globalbunjang.com\n\n"
+            "Привет! Я бот для парсинга товаров с:\n"
+            "- globalbunjang.com\n"
+            "- fruitsfamily.com\n\n"
             "Вы подписаны на рассылку новых товаров.\n"
+            f"Статус парсинга: {status_text}\n\n"
+            "Используйте кнопки ниже для управления парсингом.\n"
             "Используйте /stop чтобы отписаться от рассылки.\n"
-            "Используйте /status чтобы проверить статус подписки."
+            "Используйте /status чтобы проверить статус подписки.",
+            reply_markup=self.get_control_keyboard()
         )
     
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,10 +77,119 @@ class BunjangBot:
         user = update.effective_user
         is_subscribed = self.db.is_subscribed(user.id)
         status_text = "подписаны" if is_subscribed else "не подписаны"
-        await update.message.reply_text(f"Ваш статус: вы {status_text} на рассылку.")
+        parse_status = "активен" if self.is_parsing_active else "остановлен"
+        await update.message.reply_text(
+            f"Ваш статус: вы {status_text} на рассылку.\n"
+            f"Статус парсинга: {parse_status}",
+            reply_markup=self.get_control_keyboard()
+        )
+    
+    async def start_parse_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /start_parse"""
+        if self.is_parsing_active:
+            await update.message.reply_text(
+                "✅ Парсинг уже активен!\n\n"
+                "Парсинг выполняется автоматически по расписанию.",
+                reply_markup=self.get_control_keyboard()
+            )
+        else:
+            self.is_parsing_active = True
+            await update.message.reply_text(
+                "✅ Парсинг запущен!\n\n"
+                "Начинаю парсинг товаров...",
+                reply_markup=self.get_control_keyboard()
+            )
+            # Запускаем парсинг в фоне
+            asyncio.create_task(self.parse_and_send_with_notification(update.effective_user.id))
+    
+    async def stop_parse_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка команды /stop_parse"""
+        if not self.is_parsing_active:
+            await update.message.reply_text(
+                "⏹️ Парсинг уже остановлен!",
+                reply_markup=self.get_control_keyboard()
+            )
+        else:
+            self.is_parsing_active = False
+            await update.message.reply_text(
+                "⏹️ Парсинг остановлен!\n\n"
+                "Автоматический парсинг приостановлен. Используйте /start_parse для возобновления.",
+                reply_markup=self.get_control_keyboard()
+            )
+    
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка нажатий на кнопки"""
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data == "start_parse":
+            if self.is_parsing_active:
+                await query.edit_message_text(
+                    "✅ Парсинг уже активен!\n\n"
+                    "Парсинг выполняется автоматически по расписанию.",
+                    reply_markup=self.get_control_keyboard()
+                )
+            else:
+                self.is_parsing_active = True
+                # Запускаем парсинг немедленно
+                await query.edit_message_text(
+                    "✅ Парсинг запущен!\n\n"
+                    "Начинаю парсинг товаров...",
+                    reply_markup=self.get_control_keyboard()
+                )
+                # Запускаем парсинг в фоне
+                asyncio.create_task(self.parse_and_send_with_notification(query.message.chat_id))
+        
+        elif query.data == "stop_parse":
+            if not self.is_parsing_active:
+                await query.edit_message_text(
+                    "⏹️ Парсинг уже остановлен!",
+                    reply_markup=self.get_control_keyboard()
+                )
+            else:
+                self.is_parsing_active = False
+                await query.edit_message_text(
+                    "⏹️ Парсинг остановлен!\n\n"
+                    "Автоматический парсинг приостановлен. Используйте кнопку 'Начать парс' для возобновления.",
+                    reply_markup=self.get_control_keyboard()
+                )
+        
+        elif query.data == "parse_status":
+            status_text = "активен" if self.is_parsing_active else "остановлен"
+            subscribed_users = len(self.db.get_subscribed_users())
+            await query.edit_message_text(
+                f"📊 Статус парсинга:\n\n"
+                f"Парсинг: {status_text}\n"
+                f"Подписчиков: {subscribed_users}\n\n"
+                f"Сайты:\n"
+                f"- globalbunjang.com\n"
+                f"- fruitsfamily.com",
+                reply_markup=self.get_control_keyboard()
+            )
+    
+    async def parse_and_send_with_notification(self, user_id: int):
+        """Парсинг с уведомлением пользователя о результате"""
+        try:
+            await self.bot.send_message_to_user(
+                user_id,
+                "🔄 Начинаю парсинг товаров..."
+            )
+            
+            # Вызываем обычный парсинг
+            await self.parse_and_send()
+            
+            await self.bot.send_message_to_user(
+                user_id,
+                "✅ Парсинг завершен!"
+            )
+        except Exception as e:
+            await self.bot.send_message_to_user(
+                user_id,
+                f"❌ Ошибка при парсинге: {e}"
+            )
     
     async def parse_and_send(self):
-        """Парсинг и отправка новых товаров"""
+        """Парсинг и отправка новых товаров с обоих сайтов"""
         print("Начало парсинга...")
         
         try:
@@ -62,15 +202,38 @@ class BunjangBot:
             
             print(f"Найдено {len(user_ids)} подписанных пользователей")
             
-            # Парсим товары
-            products = self.parser.parse_trending_products(limit=20)
+            all_products = []
             
-            if not products:
+            # 1. Парсим товары с Bunjang
+            print("Парсинг Bunjang Global...")
+            try:
+                # Парсим по ссылке для maison margiela
+                search_url = "https://globalbunjang.com/search?categoryId=405&q=maison%20margiela&soldout=exclude"
+                bunjang_products = self.bunjang_parser.parse_products_from_search(search_url, limit=20)
+                if bunjang_products:
+                    all_products.extend(bunjang_products)
+                    print(f"Найдено {len(bunjang_products)} товаров на Bunjang")
+            except Exception as e:
+                print(f"Ошибка при парсинге Bunjang: {e}")
+            
+            # 2. Парсим товары с FruitsFamily
+            print("Парсинг FruitsFamily...")
+            try:
+                fruits_products = self.fruits_parser.parse_products(limit=20)
+                if fruits_products:
+                    all_products.extend(fruits_products)
+                    print(f"Найдено {len(fruits_products)} товаров на FruitsFamily")
+            except Exception as e:
+                print(f"Ошибка при парсинге FruitsFamily: {e}")
+            
+            if not all_products:
                 print("Товары не найдены")
                 return
             
+            print(f"Всего найдено {len(all_products)} товаров")
+            
             # Фильтруем только новые товары (которых нет в базе или они еще не отправлены)
-            new_products = self.db.get_new_products(products, max_age_hours=config.NEW_PRODUCTS_MAX_AGE_HOURS)
+            new_products = self.db.get_new_products(all_products, max_age_hours=config.NEW_PRODUCTS_MAX_AGE_HOURS)
             
             if not new_products:
                 print("Новых товаров не найдено")
@@ -82,10 +245,12 @@ class BunjangBot:
             products_to_send = new_products[:config.MAX_PRODUCTS_PER_MESSAGE]
             
             # Отправляем новые товары всем подписчикам
+            # Используем первый доступный парсер для форматирования (оба имеют одинаковый метод)
+            parser_for_format = self.bunjang_parser if hasattr(self.bunjang_parser, 'format_product_message') else self.fruits_parser
             sent_count = await self.bot.send_products_to_all_users(
                 user_ids,
                 products_to_send,
-                self.parser,
+                parser_for_format,
                 max_per_batch=config.MAX_PRODUCTS_PER_MESSAGE
             )
             
@@ -118,6 +283,9 @@ class BunjangBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("stop", self.stop_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("start_parse", self.start_parse_command))
+        self.application.add_handler(CommandHandler("stop_parse", self.stop_parse_command))
+        self.application.add_handler(CallbackQueryHandler(self.button_callback))
     
     async def run_bot(self):
         """Запуск бота с обработкой команд"""
@@ -150,19 +318,25 @@ class BunjangBot:
             print("\nОстановка бота...")
             await self.application.stop()
             await self.application.shutdown()
-            self.parser.close()
+            self.bunjang_parser.close()
+            self.fruits_parser.close()
     
     async def run_scheduler_async(self):
         """Асинхронный планировщик"""
         await asyncio.sleep(5)  # Задержка при запуске для инициализации бота
         
-        # Первый парсинг
-        await self.parse_and_send()
+        # Первый парсинг (если активен)
+        if self.is_parsing_active:
+            await self.parse_and_send()
         
         # Периодический парсинг
         while True:
             await asyncio.sleep(config.PARSING_INTERVAL)
-            await self.parse_and_send()
+            # Проверяем флаг перед парсингом
+            if self.is_parsing_active:
+                await self.parse_and_send()
+            else:
+                print("Парсинг остановлен пользователем, пропускаю...")
 
 def main():
     # Проверка конфигурации
@@ -179,7 +353,8 @@ def main():
         asyncio.run(bot.run_bot())
     except KeyboardInterrupt:
         print("\nОстановка бота...")
-        bot.parser.close()
+        bot.bunjang_parser.close()
+        bot.fruits_parser.close()
 
 if __name__ == '__main__':
     main()

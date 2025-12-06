@@ -10,3 +10,7 @@ env/
 ENV/
 .venv
 
+# Результаты парсинга (временные файлы)
+*_products.json
+all_products.json
+
