@@ -500,10 +500,18 @@ class BunjangParser:
     
     def format_product_message(self, product: Dict) -> str:
         """Форматирование товара для отправки в Telegram"""
+        from currency import converter
+        
         message = f"<b>{product.get('title', 'Без названия')}</b>\n\n"
         
         if product.get('price'):
-            message += f"Цена: {product['price']}\n"
+            original_price = product['price']
+            # Конвертируем цену в рубли (для Bunjang обычно KRW)
+            rubles = converter.convert_to_rubles(original_price, default_currency='KRW')
+            if rubles:
+                message += f"Цена: {original_price} (~{rubles})\n"
+            else:
+                message += f"Цена: {original_price}\n"
         
         if product.get('description'):
             message += f"{product['description'][:200]}...\n"
@@ -840,10 +848,18 @@ class FruitsFamilyParser:
     
     def format_product_message(self, product: Dict) -> str:
         """Форматирование товара для отправки в Telegram"""
+        from currency import converter
+        
         message = f"<b>{product.get('title', 'Без названия')}</b>\n\n"
         
         if product.get('price'):
-            message += f"Цена: {product['price']}\n"
+            original_price = product['price']
+            # Конвертируем цену в рубли (для FruitsFamily обычно KRW)
+            rubles = converter.convert_to_rubles(original_price, default_currency='KRW')
+            if rubles:
+                message += f"Цена: {original_price} (~{rubles})\n"
+            else:
+                message += f"Цена: {original_price}\n"
         
         if product.get('description'):
             message += f"{product['description'][:200]}...\n"

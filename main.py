@@ -1,5 +1,5 @@
 import asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from parser import BunjangParser, FruitsFamilyParser
 from bot import TelegramBot
@@ -14,11 +14,11 @@ class BunjangBot:
             use_selenium=config.USE_SELENIUM,
             brands_filter=config.BRANDS_TO_PARSE
         )
-        # Парсер для FruitsFamily
+        # Парсер для FruitsFamily (используем те же бренды, что и для Bunjang)
         self.fruits_parser = FruitsFamilyParser(
             base_url='https://fruitsfamily.com/',
             use_selenium=config.USE_SELENIUM,
-            brands_filter=config.BRANDS_TO_PARSE if hasattr(config, 'FRUITS_BRANDS_TO_PARSE') else None
+            brands_filter=config.BRANDS_TO_PARSE  # Используем те же бренды
         )
         # Для обратной совместимости
         self.parser = self.bunjang_parser
@@ -29,7 +29,7 @@ class BunjangBot:
         self.scheduler_task = None  # Задача планировщика
     
     def get_control_keyboard(self):
-        """Создает клавиатуру с кнопками управления"""
+        """Создает клавиатуру с кнопками управления (inline)"""
         keyboard = [
             [
                 InlineKeyboardButton("▶️ Начать парс", callback_data="start_parse"),
@@ -40,6 +40,19 @@ class BunjangBot:
             ]
         ]
         return InlineKeyboardMarkup(keyboard)
+    
+    def get_reply_keyboard(self):
+        """Создает постоянную клавиатуру меню"""
+        keyboard = [
+            [
+                KeyboardButton("▶️ Начать парс"),
+                KeyboardButton("⏹️ Остановить парс")
+            ],
+            [
+                KeyboardButton("📊 Статус")
+            ]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start"""
@@ -60,17 +73,19 @@ class BunjangBot:
             "- fruitsfamily.com\n\n"
             "Вы подписаны на рассылку новых товаров.\n"
             f"Статус парсинга: {status_text}\n\n"
-            "Используйте кнопки ниже для управления парсингом.\n"
-            "Используйте /stop чтобы отписаться от рассылки.\n"
-            "Используйте /status чтобы проверить статус подписки.",
-            reply_markup=self.get_control_keyboard()
+            "Используйте кнопки меню для управления парсингом.\n"
+            "Используйте /stop чтобы отписаться от рассылки.",
+            reply_markup=self.get_reply_keyboard()
         )
     
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /stop"""
         user = update.effective_user
         self.db.unsubscribe_user(user.id)
-        await update.message.reply_text("Вы отписаны от рассылки. Используйте /start чтобы подписаться снова.")
+        await update.message.reply_text(
+            "Вы отписаны от рассылки. Используйте /start чтобы подписаться снова.",
+            reply_markup=self.get_reply_keyboard()
+        )
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /status"""
@@ -78,11 +93,55 @@ class BunjangBot:
         is_subscribed = self.db.is_subscribed(user.id)
         status_text = "подписаны" if is_subscribed else "не подписаны"
         parse_status = "активен" if self.is_parsing_active else "остановлен"
+        subscribed_users = len(self.db.get_subscribed_users())
         await update.message.reply_text(
-            f"Ваш статус: вы {status_text} на рассылку.\n"
-            f"Статус парсинга: {parse_status}",
-            reply_markup=self.get_control_keyboard()
+            f"📊 Статус:\n\n"
+            f"Подписка: вы {status_text} на рассылку\n"
+            f"Парсинг: {parse_status}\n"
+            f"Всего подписчиков: {subscribed_users}\n\n"
+            f"Сайты:\n"
+            f"- globalbunjang.com\n"
+            f"- fruitsfamily.com",
+            reply_markup=self.get_reply_keyboard()
         )
+    
+    async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстовых сообщений (кнопки меню)"""
+        text = update.message.text
+        
+        if text == "▶️ Начать парс":
+            if self.is_parsing_active:
+                await update.message.reply_text(
+                    "✅ Парсинг уже активен!\n\n"
+                    "Парсинг выполняется автоматически по расписанию.",
+                    reply_markup=self.get_reply_keyboard()
+                )
+            else:
+                self.is_parsing_active = True
+                await update.message.reply_text(
+                    "✅ Парсинг запущен!\n\n"
+                    "Начинаю парсинг товаров...",
+                    reply_markup=self.get_reply_keyboard()
+                )
+                # Запускаем парсинг в фоне
+                asyncio.create_task(self.parse_and_send_with_notification(update.effective_user.id))
+        
+        elif text == "⏹️ Остановить парс":
+            if not self.is_parsing_active:
+                await update.message.reply_text(
+                    "⏹️ Парсинг уже остановлен!",
+                    reply_markup=self.get_reply_keyboard()
+                )
+            else:
+                self.is_parsing_active = False
+                await update.message.reply_text(
+                    "⏹️ Парсинг остановлен!\n\n"
+                    "Автоматический парсинг приостановлен. Используйте кнопку '▶️ Начать парс' для возобновления.",
+                    reply_markup=self.get_reply_keyboard()
+                )
+        
+        elif text == "📊 Статус":
+            await self.status_command(update, context)
     
     async def start_parse_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка команды /start_parse"""
@@ -90,14 +149,14 @@ class BunjangBot:
             await update.message.reply_text(
                 "✅ Парсинг уже активен!\n\n"
                 "Парсинг выполняется автоматически по расписанию.",
-                reply_markup=self.get_control_keyboard()
+                reply_markup=self.get_reply_keyboard()
             )
         else:
             self.is_parsing_active = True
             await update.message.reply_text(
                 "✅ Парсинг запущен!\n\n"
                 "Начинаю парсинг товаров...",
-                reply_markup=self.get_control_keyboard()
+                reply_markup=self.get_reply_keyboard()
             )
             # Запускаем парсинг в фоне
             asyncio.create_task(self.parse_and_send_with_notification(update.effective_user.id))
@@ -107,14 +166,14 @@ class BunjangBot:
         if not self.is_parsing_active:
             await update.message.reply_text(
                 "⏹️ Парсинг уже остановлен!",
-                reply_markup=self.get_control_keyboard()
+                reply_markup=self.get_reply_keyboard()
             )
         else:
             self.is_parsing_active = False
             await update.message.reply_text(
                 "⏹️ Парсинг остановлен!\n\n"
-                "Автоматический парсинг приостановлен. Используйте /start_parse для возобновления.",
-                reply_markup=self.get_control_keyboard()
+                "Автоматический парсинг приостановлен. Используйте кнопку '▶️ Начать парс' для возобновления.",
+                reply_markup=self.get_reply_keyboard()
             )
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,27 +263,59 @@ class BunjangBot:
             
             all_products = []
             
-            # 1. Парсим товары с Bunjang
+            # 1. Парсим товары с Bunjang для всех брендов из config
             print("Парсинг Bunjang Global...")
             try:
-                # Парсим по ссылке для maison margiela
-                search_url = "https://globalbunjang.com/search?categoryId=405&q=maison%20margiela&soldout=exclude"
-                bunjang_products = self.bunjang_parser.parse_products_from_search(search_url, limit=20)
+                bunjang_products = []
+                # Парсим товары для каждого бренда из списка
+                for brand_info in config.BRANDS_TO_PARSE:
+                    brand_name = brand_info['name']
+                    category = brand_info.get('category')
+                    
+                    # Формируем поисковый запрос
+                    if category == 'shoes':
+                        # Для обуви используем специальную категорию
+                        search_url = f"https://globalbunjang.com/search?categoryId=405&q={brand_name.replace(' ', '%20')}&soldout=exclude"
+                    else:
+                        search_url = f"https://globalbunjang.com/search?q={brand_name.replace(' ', '%20')}&soldout=exclude"
+                    
+                    print(f"  Парсинг бренда: {brand_name}...")
+                    brand_products = self.bunjang_parser.parse_products_from_search(search_url, limit=10)
+                    if brand_products:
+                        bunjang_products.extend(brand_products)
+                        print(f"  Найдено {len(brand_products)} товаров бренда {brand_name}")
+                
                 if bunjang_products:
                     all_products.extend(bunjang_products)
-                    print(f"Найдено {len(bunjang_products)} товаров на Bunjang")
+                    print(f"Всего найдено {len(bunjang_products)} товаров на Bunjang")
             except Exception as e:
                 print(f"Ошибка при парсинге Bunjang: {e}")
+                import traceback
+                traceback.print_exc()
             
-            # 2. Парсим товары с FruitsFamily
+            # 2. Парсим товары с FruitsFamily (только нужные бренды из config)
             print("Парсинг FruitsFamily...")
             try:
-                fruits_products = self.fruits_parser.parse_products(limit=20)
+                fruits_products = []
+                # Парсим товары для каждого бренда из списка
+                for brand_info in config.BRANDS_TO_PARSE:
+                    brand_name = brand_info['name']
+                    print(f"  Парсинг бренда: {brand_name}...")
+                    
+                    # Используем поиск по бренду
+                    search_query = brand_name
+                    brand_products = self.fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+                    if brand_products:
+                        fruits_products.extend(brand_products)
+                        print(f"  Найдено {len(brand_products)} товаров бренда {brand_name}")
+                
                 if fruits_products:
                     all_products.extend(fruits_products)
-                    print(f"Найдено {len(fruits_products)} товаров на FruitsFamily")
+                    print(f"Всего найдено {len(fruits_products)} товаров на FruitsFamily")
             except Exception as e:
                 print(f"Ошибка при парсинге FruitsFamily: {e}")
+                import traceback
+                traceback.print_exc()
             
             if not all_products:
                 print("Товары не найдены")
@@ -280,12 +371,16 @@ class BunjangBot:
     
     async def setup_handlers(self):
         """Настройка обработчиков команд"""
+        from telegram.ext import MessageHandler, filters
+        
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("stop", self.stop_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("start_parse", self.start_parse_command))
         self.application.add_handler(CommandHandler("stop_parse", self.stop_parse_command))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
+        # Обработчик текстовых сообщений (кнопки меню)
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
     
     async def run_bot(self):
         """Запуск бота с обработкой команд"""

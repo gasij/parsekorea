@@ -14,9 +14,9 @@ MAX_PRODUCTS_PER_MESSAGE = 5  # Максимальное количество т
 USE_SELENIUM = os.getenv('USE_SELENIUM', 'False').lower() == 'true'  # Использовать Selenium для динамического контента
 NEW_PRODUCTS_MAX_AGE_HOURS = 1  # Максимальный возраст товара в часах, чтобы считаться "новым" (только товары за последний час)
 
-# Бренды для парсинга (только товары этих брендов будут парситься)
+# Бренды для парсинга (только товары этих брендов будут парситься с ОБОИХ сайтов)
 BRANDS_TO_PARSE = [
-    {'name': 'maison margiela', 'category': 'shoes'},  # только обувь
+    {'name': 'maison margiela', 'category': None},  # только обувь
     {'name': 'grailz', 'category': None},
     {'name': 'project gr', 'category': None},
     {'name': 'stone island', 'category': None},

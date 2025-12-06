@@ -6,6 +6,7 @@
 from parser import BunjangParser, FruitsFamilyParser
 import json
 import time
+import config
 
 def parse_all_sites():
     """Парсинг товаров со всех сайтов"""
@@ -23,17 +24,29 @@ def parse_all_sites():
     bunjang_parser = BunjangParser(
         base_url='https://globalbunjang.com/',
         use_selenium=True,
-        brands_filter=[
-            {'name': 'maison margiela', 'category': None}
-        ]
+        brands_filter=config.BRANDS_TO_PARSE
     )
     
     try:
-        # Парсим по ссылке для maison margiela
-        search_url = "https://globalbunjang.com/search?categoryId=405&q=maison%20margiela&soldout=exclude"
-        bunjang_products = bunjang_parser.parse_products_from_search(search_url, limit=50)
+        # Парсим товары для всех брендов из config
+        bunjang_products = []
+        for brand_info in config.BRANDS_TO_PARSE:
+            brand_name = brand_info['name']
+            category = brand_info.get('category')
+            
+            if category == 'shoes':
+                search_url = f"https://globalbunjang.com/search?categoryId=405&q={brand_name.replace(' ', '%20')}&soldout=exclude"
+            else:
+                search_url = f"https://globalbunjang.com/search?q={brand_name.replace(' ', '%20')}&soldout=exclude"
+            
+            print(f"  Парсинг бренда: {brand_name}...")
+            brand_products = bunjang_parser.parse_products_from_search(search_url, limit=10)
+            if brand_products:
+                bunjang_products.extend(brand_products)
+                print(f"  Найдено {len(brand_products)} товаров")
+        
         all_products['bunjang'] = bunjang_products
-        print(f"[OK] Найдено {len(bunjang_products)} товаров на Bunjang")
+        print(f"[OK] Всего найдено {len(bunjang_products)} товаров на Bunjang")
     except Exception as e:
         print(f"[ERROR] Ошибка при парсинге Bunjang: {e}")
         all_products['bunjang'] = []
@@ -50,13 +63,24 @@ def parse_all_sites():
     fruits_parser = FruitsFamilyParser(
         base_url='https://fruitsfamily.com/',
         use_selenium=True,
-        brands_filter=None  # Можно указать фильтр, например: [{'name': 'maison margiela', 'category': None}]
+        brands_filter=config.BRANDS_TO_PARSE  # Используем те же бренды, что и для Bunjang
     )
     
     try:
-        fruits_products = fruits_parser.parse_products(limit=50)
+        # Парсим товары для всех брендов из config
+        fruits_products = []
+        for brand_info in config.BRANDS_TO_PARSE:
+            brand_name = brand_info['name']
+            print(f"  Парсинг бренда: {brand_name}...")
+            
+            search_query = brand_name
+            brand_products = fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+            if brand_products:
+                fruits_products.extend(brand_products)
+                print(f"  Найдено {len(brand_products)} товаров")
+        
         all_products['fruitsfamily'] = fruits_products
-        print(f"[OK] Найдено {len(fruits_products)} товаров на FruitsFamily")
+        print(f"[OK] Всего найдено {len(fruits_products)} товаров на FruitsFamily")
     except Exception as e:
         print(f"[ERROR] Ошибка при парсинге FruitsFamily: {e}")
         all_products['fruitsfamily'] = []
