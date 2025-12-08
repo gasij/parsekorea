@@ -743,7 +743,25 @@ class FruitsFamilyParser:
             brand_name = brand_info['name'].lower()
             category = brand_info.get('category')
             
-            if brand_name in text_to_check:
+            # Создаем варианты написания бренда для более гибкого поиска
+            brand_variants = [brand_name]
+            
+            # Специальные случаи для брендов
+            if brand_name == 'cp company':
+                brand_variants.extend(['c.p. company', 'cpcompany', 'c p company', 'cp комп니', 'cp컴퍼니', 'cp company', 'c.p.company'])
+            elif brand_name == 'maison margiela':
+                brand_variants.extend(['margiela', 'maisonmargiela', '메종 마르지엘라', '마르지엘라', '메종마르지엘라', '메종 마르지엘라'])
+            elif brand_name == 'stone island':
+                brand_variants.extend(['stoneisland', '스톤아일랜드', 'stone island'])
+            elif brand_name == 'project gr':
+                brand_variants.extend(['projectgr', 'project gr', '프로젝트 gr', 'projectgr', '프로젝트gr'])
+            elif brand_name == 'grailz':
+                brand_variants.extend(['grailz', '그레일즈'])
+            
+            # Проверяем все варианты
+            brand_found = any(variant in text_to_check for variant in brand_variants)
+            
+            if brand_found:
                 if category:
                     category_keywords = {
                         'shoes': ['shoe', 'sneaker', 'boot', 'sandal', 'slipper', 'loafer', 'oxford', 'heel', 'footwear', 
@@ -767,7 +785,13 @@ class FruitsFamilyParser:
         if not url:
             url = self.base_url
         
+        # Проверяем, является ли URL страницей конкретного бренда
+        # Если да, то фильтр брендов не нужен (все товары уже отфильтрованы)
+        is_brand_page = '/brand/' in url or ('/search/' in url and '?sort=' in url)
+        
         print(f"Парсинг страницы: {url}")
+        if is_brand_page:
+            print("  (Страница бренда - фильтр брендов будет отключен)")
         soup = self.get_page(url)
         
         if not soup:
@@ -820,20 +844,60 @@ class FruitsFamilyParser:
                             product_cards.append(link.parent if link.parent.name in ['div', 'article', 'li'] else link)
         
         # Парсим найденные карточки
+        # Если это страница конкретного бренда, временно отключаем фильтр
+        original_brands_filter = self.brands_filter
+        skip_brand_filter = is_brand_page
+        if skip_brand_filter:
+            self.brands_filter = None  # Временно отключаем фильтр для страниц брендов
+            print("  Фильтр брендов ОТКЛЮЧЕН для страницы бренда")
+        
         seen_titles = set()
         parsed_count = 0
+        filtered_count = 0
+        no_title_count = 0
+        no_link_count = 0
+        
         for card in product_cards[:limit * 3]:
             parsed_count += 1
             product = self.parse_product_card(card)
-            if product and product.get('title'):
-                title_key = product['title'].lower().strip()
-                if title_key not in seen_titles and len(title_key) > 3:
-                    seen_titles.add(title_key)
-                    products.append(product)
-                    if len(products) >= limit:
-                        break
+            
+            if product:
+                if product.get('title') and len(product.get('title', '')) > 3:
+                    title_key = product['title'].lower().strip()
+                    if title_key not in seen_titles:
+                        seen_titles.add(title_key)
+                        # Проверяем наличие ссылки
+                        if product.get('link'):
+                            products.append(product)
+                            if len(products) >= limit:
+                                break
+                        else:
+                            no_link_count += 1
+                else:
+                    no_title_count += 1
+            else:
+                # Товар был отфильтрован
+                filtered_count += 1
         
-        print(f"Обработано {parsed_count} элементов, успешно распарсено {len(products)} товаров")
+        # Восстанавливаем фильтр
+        self.brands_filter = original_brands_filter
+        
+        print(f"Обработано {parsed_count} элементов:")
+        print(f"  - Успешно распарсено: {len(products)}")
+        print(f"  - Отфильтровано: {filtered_count}")
+        print(f"  - Без названия: {no_title_count}")
+        print(f"  - Без ссылки: {no_link_count}")
+        
+        if filtered_count > 0 and len(products) == 0 and not is_brand_page:
+            print(f"ВНИМАНИЕ: Все товары отфильтрованы! Возможно, фильтр брендов слишком строгий.")
+        
+        if len(products) > 0:
+            # Показываем примеры распарсенных товаров
+            print(f"  Примеры распарсенных товаров:")
+            for i, p in enumerate(products[:3], 1):
+                print(f"    {i}. {p.get('title', 'Без названия')[:50]}")
+                print(f"       Ссылка: {p.get('link', 'Нет')[:60]}")
+        
         return products[:limit]
     
     def parse_products_from_search(self, search_url: str = None, search_query: str = None, limit: int = 50) -> List[Dict]:

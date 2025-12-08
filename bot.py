@@ -7,6 +7,18 @@ import config
 class TelegramBot:
     def __init__(self, token: str):
         self.bot = Bot(token=token)
+        self._db = None  # Ленивая инициализация базы данных
+    
+    def _unsubscribe_user(self, user_id: int):
+        """Отписать пользователя от рассылки (внутренний метод)"""
+        try:
+            from database import ProductDatabase
+            import config
+            if self._db is None:
+                self._db = ProductDatabase(config.DB_FILE)
+            self._db.unsubscribe_user(user_id)
+        except Exception as e:
+            print(f"Ошибка при отписке пользователя {user_id}: {e}")
     
     async def send_product_to_user(self, user_id: int, product: Dict, parser) -> bool:
         """Отправка одного товара конкретному пользователю"""
@@ -23,20 +35,40 @@ class TelegramBot:
                         parse_mode='HTML'
                     )
                     return True
-                except Exception as e:
+                except TelegramError as e:
+                    error_message = str(e)
+                    # Если пользователь заблокировал бота или удалил чат, отписываем его
+                    if "Chat not found" in error_message or "bot was blocked" in error_message.lower() or "chat not found" in error_message.lower():
+                        print(f"Пользователь {user_id} заблокировал бота или удалил чат, отписываем...")
+                        self._unsubscribe_user(user_id)
+                        return False
                     print(f"Ошибка при отправке фото пользователю {user_id}, пробуем без фото: {e}")
             
             # Отправка без фото
-            await self.bot.send_message(
-                chat_id=user_id,
-                text=message,
-                parse_mode='HTML',
-                disable_web_page_preview=False
-            )
-            return True
+            try:
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    parse_mode='HTML',
+                    disable_web_page_preview=False
+                )
+                return True
+            except TelegramError as e:
+                error_message = str(e)
+                if "Chat not found" in error_message or "bot was blocked" in error_message.lower() or "chat not found" in error_message.lower():
+                    print(f"Пользователь {user_id} заблокировал бота или удалил чат, отписываем...")
+                    self._unsubscribe_user(user_id)
+                    return False
+                raise
             
         except TelegramError as e:
-            print(f"Ошибка Telegram при отправке товара пользователю {user_id}: {e}")
+            error_message = str(e)
+            # Если пользователь заблокировал бота или удалил чат, отписываем его
+            if "Chat not found" in error_message or "bot was blocked" in error_message.lower() or "chat not found" in error_message.lower():
+                print(f"Пользователь {user_id} заблокировал бота или удалил чат, отписываем...")
+                self._unsubscribe_user(user_id)
+            else:
+                print(f"Ошибка Telegram при отправке товара пользователю {user_id}: {e}")
             return False
         except Exception as e:
             print(f"Общая ошибка при отправке товара пользователю {user_id}: {e}")
@@ -74,8 +106,17 @@ class TelegramBot:
                 parse_mode='HTML'
             )
             return True
+        except TelegramError as e:
+            error_message = str(e)
+            # Если пользователь заблокировал бота или удалил чат, отписываем его
+            if "Chat not found" in error_message or "bot was blocked" in error_message.lower() or "chat not found" in error_message.lower():
+                print(f"Пользователь {user_id} заблокировал бота или удалил чат, отписываем...")
+                self._unsubscribe_user(user_id)
+            else:
+                print(f"Ошибка Telegram при отправке сообщения пользователю {user_id}: {e}")
+            return False
         except Exception as e:
-            print(f"Ошибка при отправке сообщения пользователю {user_id}: {e}")
+            print(f"Общая ошибка при отправке сообщения пользователю {user_id}: {e}")
             return False
     
     async def send_message_to_all_users(self, user_ids: List[int], text: str) -> int:

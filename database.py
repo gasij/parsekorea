@@ -127,10 +127,22 @@ class ProductDatabase:
         # Время, до которого считаем товары "новыми" (за последний час)
         cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
         
+        stats = {
+            'no_id': 0,
+            'new': 0,
+            'already_sent': 0,
+            'too_old': 0,
+            'fruits_new': 0,
+            'fruits_filtered': 0
+        }
+        
         for product in products:
             product_id = product.get('link', product.get('title', ''))
             if not product_id:
+                stats['no_id'] += 1
                 continue
+            
+            is_fruits = 'fruitsfamily.com' in product_id
                 
             import hashlib
             product_id_hash = hashlib.md5(product_id.encode()).hexdigest()
@@ -159,6 +171,9 @@ class ProductDatabase:
             if not result:
                 # Товар полностью новый - добавляем
                 new_products.append(product)
+                stats['new'] += 1
+                if is_fruits:
+                    stats['fruits_new'] += 1
             else:
                 # Товар существует в базе
                 sent_at_str = result[0] if result else None
@@ -187,11 +202,28 @@ class ProductDatabase:
                 else:
                     is_recent = True
                 
-                # Отправляем только если товар еще не был отправлен И он новый (за последний час)
-                if not sent_at_str and is_recent:
-                    # Товар найден в течение последнего часа и еще не отправлен - добавляем
+                # Отправляем только если товар еще не был отправлен
+                # Для FruitsFamily: если товар не отправлен, считаем его новым независимо от возраста
+                # (так как товары на страницах брендов могут быть старыми, но мы их еще не отправляли)
+                if not sent_at_str:
+                    # Товар еще не отправлен - добавляем (даже если он старый)
+                    # Это особенно важно для FruitsFamily, где мы парсим страницы брендов
                     new_products.append(product)
-                # Если товар уже отправлен или старый - пропускаем
+                    stats['new'] += 1
+                    if is_fruits:
+                        stats['fruits_new'] += 1
+                else:
+                    # Товар уже был отправлен
+                    stats['already_sent'] += 1
+                    if is_fruits:
+                        stats['fruits_filtered'] += 1
+        
+        # Выводим статистику
+        print(f"Статистика фильтрации товаров:")
+        print(f"  - Новых товаров: {stats['new']} (FruitsFamily: {stats['fruits_new']})")
+        print(f"  - Уже отправлено: {stats['already_sent']} (FruitsFamily: {stats['fruits_filtered']})")
+        print(f"  - Слишком старых: {stats['too_old']}")
+        print(f"  - Без ID: {stats['no_id']}")
         
         return new_products
     

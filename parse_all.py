@@ -67,14 +67,21 @@ def parse_all_sites():
     )
     
     try:
-        # Парсим товары для всех брендов из config
+        # Парсим товары для всех брендов из config по конкретным ссылкам
         fruits_products = []
         for brand_info in config.BRANDS_TO_PARSE:
             brand_name = brand_info['name']
             print(f"  Парсинг бренда: {brand_name}...")
             
-            search_query = brand_name
-            brand_products = fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+            # Используем конкретную ссылку для бренда из config
+            brand_url = config.FRUITS_BRAND_URLS.get(brand_name.lower())
+            if brand_url:
+                brand_products = fruits_parser.parse_products(url=brand_url, limit=20)
+            else:
+                # Если ссылки нет, используем поиск (резервный вариант)
+                search_query = brand_name
+                brand_products = fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+            
             if brand_products:
                 fruits_products.extend(brand_products)
                 print(f"  Найдено {len(brand_products)} товаров")

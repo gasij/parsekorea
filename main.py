@@ -15,9 +15,10 @@ class BunjangBot:
             brands_filter=config.BRANDS_TO_PARSE
         )
         # Парсер для FruitsFamily (используем те же бренды, что и для Bunjang)
+        # Для FruitsFamily всегда используем Selenium, так как сайт требует JavaScript
         self.fruits_parser = FruitsFamilyParser(
             base_url='https://fruitsfamily.com/',
-            use_selenium=config.USE_SELENIUM,
+            use_selenium=True,  # Всегда используем Selenium для FruitsFamily
             brands_filter=config.BRANDS_TO_PARSE  # Используем те же бренды
         )
         # Для обратной совместимости
@@ -293,25 +294,50 @@ class BunjangBot:
                 import traceback
                 traceback.print_exc()
             
-            # 2. Парсим товары с FruitsFamily (только нужные бренды из config)
+            # 2. Парсим товары с FruitsFamily по конкретным ссылкам для каждого бренда
             print("Парсинг FruitsFamily...")
             try:
                 fruits_products = []
-                # Парсим товары для каждого бренда из списка
+                # Парсим товары для каждого бренда из списка по конкретным ссылкам
                 for brand_info in config.BRANDS_TO_PARSE:
                     brand_name = brand_info['name']
                     print(f"  Парсинг бренда: {brand_name}...")
                     
-                    # Используем поиск по бренду
-                    search_query = brand_name
-                    brand_products = self.fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+                    # Используем конкретную ссылку для бренда из config
+                    brand_url = config.FRUITS_BRAND_URLS.get(brand_name.lower())
+                    if brand_url:
+                        brand_products = self.fruits_parser.parse_products(url=brand_url, limit=20)
+                    else:
+                        # Если ссылки нет, используем поиск (резервный вариант)
+                        search_query = brand_name
+                        brand_products = self.fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
+                    
                     if brand_products:
                         fruits_products.extend(brand_products)
-                        print(f"  Найдено {len(brand_products)} товаров бренда {brand_name}")
+                        # Проверяем, что товары имеют необходимые поля
+                        valid_products = [p for p in brand_products if p.get('link') and p.get('title')]
+                        if len(valid_products) < len(brand_products):
+                            print(f"  ВНИМАНИЕ: {len(brand_products) - len(valid_products)} товаров без ссылки или названия")
+                        print(f"  Найдено {len(brand_products)} товаров бренда {brand_name} (валидных: {len(valid_products)})")
+                    else:
+                        print(f"  Товары не найдены для бренда {brand_name}")
                 
                 if fruits_products:
                     all_products.extend(fruits_products)
-                    print(f"Всего найдено {len(fruits_products)} товаров на FruitsFamily")
+                    valid_fruits = [p for p in fruits_products if p.get('link') and p.get('title')]
+                    print(f"Всего найдено {len(fruits_products)} товаров на FruitsFamily (валидных: {len(valid_fruits)})")
+                    if len(valid_fruits) < len(fruits_products):
+                        print(f"  ВНИМАНИЕ: {len(fruits_products) - len(valid_fruits)} товаров FruitsFamily без ссылки или названия!")
+                    
+                    # Временная отладка: сохраняем первые несколько товаров для проверки
+                    if valid_fruits:
+                        print(f"  Примеры товаров FruitsFamily:")
+                        for i, p in enumerate(valid_fruits[:3], 1):
+                            print(f"    {i}. {p.get('title', 'Без названия')[:50]}")
+                            print(f"       Ссылка: {p.get('link', 'Нет ссылки')[:80]}")
+                            print(f"       Цена: {p.get('price', 'Нет цены')}")
+                else:
+                    print("  ВНИМАНИЕ: Не найдено ни одного товара на FruitsFamily!")
             except Exception as e:
                 print(f"Ошибка при парсинге FruitsFamily: {e}")
                 import traceback
@@ -323,17 +349,42 @@ class BunjangBot:
             
             print(f"Всего найдено {len(all_products)} товаров")
             
+            # Подсчитываем товары по источникам для отладки
+            bunjang_count = sum(1 for p in all_products if 'globalbunjang.com' in p.get('link', ''))
+            fruits_count = sum(1 for p in all_products if 'fruitsfamily.com' in p.get('link', ''))
+            print(f"  - С Bunjang: {bunjang_count} товаров")
+            print(f"  - С FruitsFamily: {fruits_count} товаров")
+            
             # Фильтруем только новые товары (которых нет в базе или они еще не отправлены)
             new_products = self.db.get_new_products(all_products, max_age_hours=config.NEW_PRODUCTS_MAX_AGE_HOURS)
             
             if not new_products:
                 print("Новых товаров не найдено")
+                # Отладочная информация
+                print(f"  Все {len(all_products)} товаров были отфильтрованы как старые или уже отправленные")
                 return
             
+            # Подсчитываем новые товары по источникам
+            new_bunjang = sum(1 for p in new_products if 'globalbunjang.com' in p.get('link', ''))
+            new_fruits = sum(1 for p in new_products if 'fruitsfamily.com' in p.get('link', ''))
             print(f"Найдено {len(new_products)} новых товаров (только что обнаружено)")
+            print(f"  - С Bunjang: {new_bunjang} новых")
+            print(f"  - С FruitsFamily: {new_fruits} новых")
+            
+            # Если есть новые товары FruitsFamily, показываем примеры
+            if new_fruits > 0:
+                fruits_new = [p for p in new_products if 'fruitsfamily.com' in p.get('link', '')]
+                print(f"  Примеры новых товаров FruitsFamily для отправки:")
+                for i, p in enumerate(fruits_new[:3], 1):
+                    print(f"    {i}. {p.get('title', 'Без названия')[:50]}")
             
             # Ограничиваем количество для отправки
             products_to_send = new_products[:config.MAX_PRODUCTS_PER_MESSAGE]
+            
+            # Проверяем, сколько товаров FruitsFamily будет отправлено
+            fruits_to_send = sum(1 for p in products_to_send if 'fruitsfamily.com' in p.get('link', ''))
+            if fruits_to_send > 0:
+                print(f"Будет отправлено {fruits_to_send} товаров с FruitsFamily из {len(products_to_send)} товаров")
             
             # Отправляем новые товары всем подписчикам
             # Используем первый доступный парсер для форматирования (оба имеют одинаковый метод)
@@ -346,9 +397,18 @@ class BunjangBot:
             )
             
             # Сохраняем отправленные товары в БД и отмечаем как отправленные
+            fruits_sent = 0
+            bunjang_sent = 0
+            
             for i, product in enumerate(products_to_send):
                 if i >= sent_count:
                     break
+                
+                # Подсчитываем по источникам
+                if 'fruitsfamily.com' in product.get('link', ''):
+                    fruits_sent += 1
+                elif 'globalbunjang.com' in product.get('link', ''):
+                    bunjang_sent += 1
                     
                 # Сначала добавляем/обновляем товар в базе
                 self.db.add_product(product, mark_as_sent=False)
@@ -360,7 +420,13 @@ class BunjangBot:
                     product_id_hash = hashlib.md5(product_id.encode()).hexdigest()
                     self.db.mark_as_sent(product_id_hash)
             
-            print(f"Отправлено {sent_count} новых товаров пользователям")
+            print(f"Отправлено {sent_count} новых товаров пользователям:")
+            print(f"  - С Bunjang: {bunjang_sent}")
+            print(f"  - С FruitsFamily: {fruits_sent}")
+            
+            if fruits_sent == 0 and new_fruits > 0:
+                print(f"  ВНИМАНИЕ: Найдено {new_fruits} новых товаров FruitsFamily, но ни один не был отправлен!")
+                print(f"  Возможно, они были отфильтрованы при отправке или превышен лимит MAX_PRODUCTS_PER_MESSAGE")
             
         except Exception as e:
             print(f"Ошибка при парсинге и отправке: {e}")
