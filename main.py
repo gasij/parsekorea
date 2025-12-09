@@ -323,11 +323,37 @@ class BunjangBot:
                         print(f"  Товары не найдены для бренда {brand_name}")
                 
                 if fruits_products:
-                    all_products.extend(fruits_products)
-                    valid_fruits = [p for p in fruits_products if p.get('link') and p.get('title')]
-                    print(f"Всего найдено {len(fruits_products)} товаров на FruitsFamily (валидных: {len(valid_fruits)})")
-                    if len(valid_fruits) < len(fruits_products):
-                        print(f"  ВНИМАНИЕ: {len(fruits_products) - len(valid_fruits)} товаров FruitsFamily без ссылки или названия!")
+                    # Дедупликация товаров FruitsFamily по ссылке (один товар может быть на разных страницах брендов)
+                    seen_links = set()
+                    unique_fruits_products = []
+                    duplicates_count = 0
+                    
+                    for product in fruits_products:
+                        link = product.get('link', '')
+                        if link:
+                            # Используем ссылку как уникальный идентификатор
+                            if link not in seen_links:
+                                seen_links.add(link)
+                                unique_fruits_products.append(product)
+                            else:
+                                duplicates_count += 1
+                        else:
+                            # Если нет ссылки, используем название для дедупликации
+                            title = product.get('title', '').lower().strip()
+                            if title and title not in seen_links:
+                                seen_links.add(title)
+                                unique_fruits_products.append(product)
+                            else:
+                                duplicates_count += 1
+                    
+                    if duplicates_count > 0:
+                        print(f"  Удалено {duplicates_count} дубликатов товаров FruitsFamily")
+                    
+                    all_products.extend(unique_fruits_products)
+                    valid_fruits = [p for p in unique_fruits_products if p.get('link') and p.get('title')]
+                    print(f"Всего найдено {len(unique_fruits_products)} уникальных товаров на FruitsFamily (валидных: {len(valid_fruits)})")
+                    if len(valid_fruits) < len(unique_fruits_products):
+                        print(f"  ВНИМАНИЕ: {len(unique_fruits_products) - len(valid_fruits)} товаров FruitsFamily без ссылки или названия!")
                     
                     # Временная отладка: сохраняем первые несколько товаров для проверки
                     if valid_fruits:
@@ -347,7 +373,27 @@ class BunjangBot:
                 print("Товары не найдены")
                 return
             
-            print(f"Всего найдено {len(all_products)} товаров")
+            # Финальная дедупликация всех товаров по ссылке (на случай, если один товар есть на обоих сайтах)
+            seen_all_links = set()
+            unique_all_products = []
+            for product in all_products:
+                link = product.get('link', '')
+                if link and link not in seen_all_links:
+                    seen_all_links.add(link)
+                    unique_all_products.append(product)
+                elif not link:
+                    # Если нет ссылки, используем название
+                    title = product.get('title', '').lower().strip()
+                    if title and title not in seen_all_links:
+                        seen_all_links.add(title)
+                        unique_all_products.append(product)
+            
+            if len(unique_all_products) < len(all_products):
+                print(f"Удалено {len(all_products) - len(unique_all_products)} дубликатов между сайтами")
+            
+            all_products = unique_all_products
+            
+            print(f"Всего найдено {len(all_products)} уникальных товаров")
             
             # Подсчитываем товары по источникам для отладки
             bunjang_count = sum(1 for p in all_products if 'globalbunjang.com' in p.get('link', ''))
