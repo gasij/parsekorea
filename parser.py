@@ -39,14 +39,49 @@ class BunjangParser:
         
         try:
             if not self.driver:
-                chrome_options = Options()
-                chrome_options.add_argument('--headless')
-                chrome_options.add_argument('--no-sandbox')
-                chrome_options.add_argument('--disable-dev-shm-usage')
-                chrome_options.add_argument('--disable-gpu')
-                chrome_options.add_argument('--window-size=1920,1080')
-                chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
-                self.driver = webdriver.Chrome(options=chrome_options)
+                print("  Инициализация Selenium драйвера...")
+                try:
+                    chrome_options = Options()
+                    chrome_options.add_argument('--headless')
+                    chrome_options.add_argument('--no-sandbox')
+                    chrome_options.add_argument('--disable-dev-shm-usage')
+                    chrome_options.add_argument('--disable-gpu')
+                    chrome_options.add_argument('--window-size=1920,1080')
+                    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+                    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    chrome_options.add_experimental_option('useAutomationExtension', False)
+                    chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    print("  Selenium драйвер успешно инициализирован")
+                except Exception as e:
+                    print(f"  ОШИБКА при инициализации Selenium драйвера: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
+            else:
+                # Проверяем, что драйвер еще работает
+                try:
+                    self.driver.current_url
+                except:
+                    print("  Драйвер не работает, пересоздаем...")
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                    self.driver = None
+                    # Пробуем создать заново
+                    chrome_options = Options()
+                    chrome_options.add_argument('--headless')
+                    chrome_options.add_argument('--no-sandbox')
+                    chrome_options.add_argument('--disable-dev-shm-usage')
+                    chrome_options.add_argument('--disable-gpu')
+                    chrome_options.add_argument('--window-size=1920,1080')
+                    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+                    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    chrome_options.add_experimental_option('useAutomationExtension', False)
+                    chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    print("  Selenium драйвер пересоздан")
             
             self.driver.get(url)
             # Ждем загрузки контента
@@ -56,8 +91,18 @@ class BunjangParser:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
             
-            html = self.driver.page_source
-            return BeautifulSoup(html, 'html.parser')
+            try:
+                html = self.driver.page_source
+                if not html or len(html) < 100:
+                    print(f"  ВНИМАНИЕ: Получен пустой или очень короткий HTML ({len(html) if html else 0} символов)")
+                    return None
+                print(f"  HTML получен, размер: {len(html)} символов")
+                return BeautifulSoup(html, 'html.parser')
+            except Exception as e:
+                print(f"  ОШИБКА при получении HTML: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
         except Exception as e:
             print(f"Ошибка при получении страницы через Selenium {url}: {e}")
             return None
@@ -543,49 +588,99 @@ class FruitsFamilyParser:
     def get_page_selenium(self, url: str) -> Optional[BeautifulSoup]:
         """Получить HTML страницы с помощью Selenium"""
         if not SELENIUM_AVAILABLE:
+            print("  Selenium не доступен")
             return None
         
         try:
             if not self.driver:
-                chrome_options = Options()
-                chrome_options.add_argument('--headless')
-                chrome_options.add_argument('--no-sandbox')
-                chrome_options.add_argument('--disable-dev-shm-usage')
-                chrome_options.add_argument('--disable-gpu')
-                chrome_options.add_argument('--window-size=1920,1080')
-                chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
-                self.driver = webdriver.Chrome(options=chrome_options)
+                print("  Инициализация Selenium драйвера...")
+                try:
+                    chrome_options = Options()
+                    chrome_options.add_argument('--headless')
+                    chrome_options.add_argument('--no-sandbox')
+                    chrome_options.add_argument('--disable-dev-shm-usage')
+                    chrome_options.add_argument('--disable-gpu')
+                    chrome_options.add_argument('--window-size=1920,1080')
+                    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+                    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    chrome_options.add_experimental_option('useAutomationExtension', False)
+                    chrome_options.add_argument(f'user-agent={self.session.headers["User-Agent"]}')
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    print("  Selenium драйвер успешно инициализирован")
+                except Exception as e:
+                    print(f"  ОШИБКА при инициализации Selenium драйвера: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
             
-            self.driver.get(url)
+            print(f"  Загрузка страницы через Selenium: {url}")
+            try:
+                self.driver.get(url)
+                print(f"  Страница загружена, ожидание загрузки контента...")
+            except Exception as e:
+                print(f"  ОШИБКА при загрузке URL через Selenium: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+            
             # Ждем загрузки контента
             time.sleep(4)
             
             # Прокручиваем страницу для загрузки динамического контента
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)
+            try:
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(2)
+                self.driver.execute_script("window.scrollTo(0, 0);")
+                time.sleep(1)
+            except Exception as e:
+                print(f"  Предупреждение при прокрутке страницы: {e}")
             
-            html = self.driver.page_source
-            return BeautifulSoup(html, 'html.parser')
+            try:
+                html = self.driver.page_source
+                if not html or len(html) < 100:
+                    print(f"  ВНИМАНИЕ: Получен пустой или очень короткий HTML ({len(html) if html else 0} символов)")
+                    return None
+                print(f"  HTML получен, размер: {len(html)} символов")
+                return BeautifulSoup(html, 'html.parser')
+            except Exception as e:
+                print(f"  ОШИБКА при получении HTML: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
         except Exception as e:
-            print(f"Ошибка при получении страницы через Selenium {url}: {e}")
+            print(f"  КРИТИЧЕСКАЯ ОШИБКА при получении страницы через Selenium {url}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def get_page(self, url: str) -> Optional[BeautifulSoup]:
         """Получить HTML страницы"""
         if self.use_selenium:
-            return self.get_page_selenium(url)
+            print(f"  Используем Selenium для загрузки страницы")
+            result = self.get_page_selenium(url)
+            if not result:
+                print(f"  Selenium не смог загрузить страницу, пробуем обычный HTTP запрос...")
+                # Пробуем обычный запрос как fallback
+                try:
+                    response = self.session.get(url, timeout=15)
+                    response.raise_for_status()
+                    print(f"  HTTP запрос успешен, размер ответа: {len(response.content)} байт")
+                    return BeautifulSoup(response.content, 'html.parser')
+                except Exception as e:
+                    print(f"  HTTP запрос также не удался: {e}")
+            return result
         
         try:
+            print(f"  Пробуем обычный HTTP запрос...")
             response = self.session.get(url, timeout=15)
             response.raise_for_status()
+            print(f"  HTTP запрос успешен, размер ответа: {len(response.content)} байт")
             return BeautifulSoup(response.content, 'html.parser')
         except Exception as e:
-            print(f"Ошибка при получении страницы {url}: {e}")
+            print(f"  Ошибка при обычном HTTP запросе {url}: {e}")
             # Пробуем через Selenium если обычный запрос не сработал
             if SELENIUM_AVAILABLE:
-                print("Пробуем через Selenium...")
+                print("  Пробуем через Selenium...")
                 return self.get_page_selenium(url)
             return None
     
