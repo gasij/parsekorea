@@ -792,15 +792,25 @@ class FruitsFamilyParser:
         print(f"Парсинг страницы: {url}")
         if is_brand_page:
             print("  (Страница бренда - фильтр брендов будет отключен)")
+        
+        # Сначала пробуем обычный запрос
         soup = self.get_page(url)
         
         if not soup:
-            if not self.use_selenium and SELENIUM_AVAILABLE:
-                print("Пробуем использовать Selenium для динамического контента...")
+            print("  Обычный запрос не удался, пробуем Selenium...")
+            if self.use_selenium and SELENIUM_AVAILABLE:
+                print("  Используем Selenium для динамического контента...")
+                soup = self.get_page_selenium(url)
+            elif not self.use_selenium and SELENIUM_AVAILABLE:
+                print("  Selenium доступен, но не включен. Пробуем использовать его...")
                 soup = self.get_page_selenium(url)
             
             if not soup:
+                print(f"  ОШИБКА: Не удалось загрузить страницу {url}")
+                print(f"  use_selenium={self.use_selenium}, SELENIUM_AVAILABLE={SELENIUM_AVAILABLE}")
                 return products
+        else:
+            print(f"  Страница успешно загружена (обычный запрос)")
         
         # Ищем карточки товаров
         product_cards = []
@@ -830,18 +840,33 @@ class FruitsFamilyParser:
         
         # Если не нашли, ищем в контейнерах
         if not product_cards:
+            print("  Стандартные селекторы не нашли товары, ищем в контейнерах...")
             containers = soup.find_all(['div', 'section', 'article', 'ul', 'li'], 
                                      class_=lambda x: x and (
                                          'list' in x.lower() or 'grid' in x.lower() or 'container' in x.lower() or 
                                          'products' in x.lower() or 'items' in x.lower() or 'card' in x.lower()
                                      ))
+            print(f"  Найдено {len(containers)} контейнеров")
             for container in containers:
                 links = container.find_all('a', href=True)
                 for link in links:
                     href = link.get('href', '')
-                    if '/product/' in href or '/item/' in href or '/goods/' in href:
+                    if '/product/' in href or '/item/' in href or '/goods/' in href or '/brand/' in href:
                         if link.find('img') and link.get_text(strip=True) and len(link.get_text(strip=True)) > 10:
                             product_cards.append(link.parent if link.parent.name in ['div', 'article', 'li'] else link)
+            
+            if not product_cards:
+                print("  ВНИМАНИЕ: Не найдено ни одной карточки товара!")
+                # Пробуем найти любые ссылки с изображениями
+                all_links = soup.find_all('a', href=True)
+                links_with_img = [link for link in all_links if link.find('img')]
+                print(f"  Найдено {len(all_links)} ссылок, из них {len(links_with_img)} с изображениями")
+                if links_with_img:
+                    print(f"  Примеры ссылок с изображениями:")
+                    for i, link in enumerate(links_with_img[:5], 1):
+                        href = link.get('href', '')[:80]
+                        text = link.get_text(strip=True)[:50]
+                        print(f"    {i}. {href} - {text}")
         
         # Парсим найденные карточки
         # Если это страница конкретного бренда, временно отключаем фильтр
@@ -857,6 +882,7 @@ class FruitsFamilyParser:
         no_title_count = 0
         no_link_count = 0
         
+        print(f"  Начинаем парсинг {len(product_cards)} карточек товаров...")
         for card in product_cards[:limit * 3]:
             parsed_count += 1
             product = self.parse_product_card(card)
@@ -873,11 +899,21 @@ class FruitsFamilyParser:
                                 break
                         else:
                             no_link_count += 1
+                            if no_link_count <= 3:  # Показываем первые 3 примера
+                                print(f"    Товар без ссылки: {product.get('title', 'Без названия')[:50]}")
                 else:
                     no_title_count += 1
+                    if no_title_count <= 3:  # Показываем первые 3 примера
+                        print(f"    Товар без названия, ссылка: {product.get('link', 'Нет')[:60]}")
             else:
                 # Товар был отфильтрован
                 filtered_count += 1
+                if filtered_count <= 3:  # Показываем первые 3 примера отфильтрованных
+                    try:
+                        card_text = card.get_text(strip=True)[:50] if hasattr(card, 'get_text') else str(card)[:50]
+                        print(f"    Товар отфильтрован: {card_text}")
+                    except:
+                        print(f"    Товар отфильтрован (не удалось получить текст)")
         
         # Восстанавливаем фильтр
         self.brands_filter = original_brands_filter

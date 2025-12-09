@@ -306,9 +306,11 @@ class BunjangBot:
                     # Используем конкретную ссылку для бренда из config
                     brand_url = config.FRUITS_BRAND_URLS.get(brand_name.lower())
                     if brand_url:
+                        print(f"    URL: {brand_url}")
                         brand_products = self.fruits_parser.parse_products(url=brand_url, limit=20)
                     else:
                         # Если ссылки нет, используем поиск (резервный вариант)
+                        print(f"    Ссылка для бренда {brand_name} не найдена в config, используем поиск")
                         search_query = brand_name
                         brand_products = self.fruits_parser.parse_products_from_search(search_query=search_query, limit=10)
                     
